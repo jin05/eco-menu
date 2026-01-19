@@ -4,6 +4,7 @@ import { useState } from 'react'
 import ImageUploader from '@/components/ImageUploader'
 import RecipeCard, { ShoppingList, RecipeCardSkeleton } from '@/components/RecipeCard'
 import { GenerateMenuResponse, AnalyzeImageResponse } from '@/lib/openai'
+import { useMealHistory } from '@/hooks/useMealHistory'
 
 type Step = 'upload' | 'ingredients' | 'menu'
 
@@ -15,7 +16,17 @@ export default function Home() {
   const [menuResult, setMenuResult] = useState<GenerateMenuResponse | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [isAdopted, setIsAdopted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+
+  // 編集中の食材インデックス
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+
+  // Supabase連携フック
+  const { fetchRecentHistory, saveMenuToHistory } = useMealHistory()
 
   // 画像解析
   const analyzeImage = async () => {
@@ -46,20 +57,27 @@ export default function Home() {
     }
   }
 
-  // 献立生成
+  // 献立生成（履歴データを考慮）
   const generateMenu = async () => {
     if (ingredients.length === 0) return
 
     setIsGenerating(true)
     setError(null)
+    setIsAdopted(false)
+    setSuccessMessage(null)
 
     try {
+      // 1. Supabaseから直近3回分の履歴を取得
+      const history = await fetchRecentHistory(3)
+      console.log('取得した履歴:', history)
+
+      // 2. 履歴を含めてAPI呼び出し
       const res = await fetch('/api/generate-menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ingredients,
-          history: [], // 実際にはSupabaseから取得
+          history, // マンネリ防止のため履歴を送信
         }),
       })
 
@@ -78,6 +96,31 @@ export default function Home() {
     }
   }
 
+  // 献立を採用してSupabaseに保存
+  const adoptMenu = async () => {
+    if (!menuResult) return
+
+    setIsSaving(true)
+    setError(null)
+    setSuccessMessage(null)
+
+    try {
+      const success = await saveMenuToHistory(menuResult, ingredients)
+
+      if (success) {
+        setIsAdopted(true)
+        setSuccessMessage('献立を保存しました！次回の提案に反映されます。')
+      } else {
+        setSuccessMessage('献立をローカルに保存しました。')
+        setIsAdopted(true)
+      }
+    } catch (err) {
+      setError('保存中にエラーが発生しました')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   // 食材を追加
   const addIngredient = () => {
     if (newIngredient.trim() && !ingredients.includes(newIngredient.trim())) {
@@ -89,6 +132,36 @@ export default function Home() {
   // 食材を削除
   const removeIngredient = (index: number) => {
     setIngredients(ingredients.filter((_, i) => i !== index))
+    if (editingIndex === index) {
+      setEditingIndex(null)
+      setEditingValue('')
+    }
+  }
+
+  // 食材の編集開始
+  const startEditing = (index: number) => {
+    setEditingIndex(index)
+    setEditingValue(ingredients[index])
+  }
+
+  // 食材の編集確定
+  const confirmEdit = () => {
+    if (editingIndex === null) return
+
+    if (editingValue.trim()) {
+      const newIngredients = [...ingredients]
+      newIngredients[editingIndex] = editingValue.trim()
+      setIngredients(newIngredients)
+    }
+
+    setEditingIndex(null)
+    setEditingValue('')
+  }
+
+  // 食材の編集キャンセル
+  const cancelEdit = () => {
+    setEditingIndex(null)
+    setEditingValue('')
   }
 
   // 最初からやり直し
@@ -98,6 +171,10 @@ export default function Home() {
     setIngredients([])
     setMenuResult(null)
     setError(null)
+    setSuccessMessage(null)
+    setIsAdopted(false)
+    setEditingIndex(null)
+    setEditingValue('')
   }
 
   return (
@@ -138,6 +215,16 @@ export default function Home() {
             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
           </svg>
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* Success display */}
+      {successMessage && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-xl text-green-700 flex items-center gap-3">
+          <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+          </svg>
+          <span>{successMessage}</span>
         </div>
       )}
 
@@ -201,7 +288,7 @@ export default function Home() {
           <div className="text-center">
             <h2 className="text-2xl font-bold text-gray-800">食材リストを確認</h2>
             <p className="text-gray-600 mt-2">
-              必要に応じて追加・削除してください
+              タップして編集、×ボタンで削除できます
             </p>
           </div>
 
@@ -225,26 +312,72 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Ingredients tags */}
-          <div className="min-h-[100px] p-4 bg-white border border-gray-200 rounded-xl">
+          {/* Ingredients tags with edit functionality */}
+          <div className="min-h-[120px] p-4 bg-white border border-gray-200 rounded-xl">
             {ingredients.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {ingredients.map((ingredient, i) => (
-                  <span
-                    key={i}
-                    className="group flex items-center gap-1 px-3 py-2 bg-green-100 text-green-800
-                      rounded-full text-sm font-medium hover:bg-green-200 transition-colors"
-                  >
-                    {ingredient}
-                    <button
-                      onClick={() => removeIngredient(i)}
-                      className="ml-1 w-4 h-4 rounded-full bg-green-300 text-green-700
-                        hover:bg-red-400 hover:text-white transition-colors
-                        flex items-center justify-center text-xs"
-                    >
-                      ×
-                    </button>
-                  </span>
+                  <div key={i}>
+                    {editingIndex === i ? (
+                      // 編集モード
+                      <div className="flex items-center gap-1 bg-yellow-100 rounded-full px-2 py-1">
+                        <input
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') confirmEdit()
+                            if (e.key === 'Escape') cancelEdit()
+                          }}
+                          autoFocus
+                          className="w-24 px-2 py-1 text-sm border border-yellow-400 rounded-lg
+                            focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                        />
+                        <button
+                          onClick={confirmEdit}
+                          className="p-1 text-green-600 hover:text-green-700"
+                          title="確定"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="p-1 text-red-600 hover:text-red-700"
+                          title="キャンセル"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      // 表示モード
+                      <span
+                        className="group flex items-center gap-1 px-3 py-2 bg-green-100 text-green-800
+                          rounded-full text-sm font-medium hover:bg-green-200 transition-colors cursor-pointer"
+                        onClick={() => startEditing(i)}
+                        title="クリックして編集"
+                      >
+                        <svg className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                        {ingredient}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeIngredient(i)
+                          }}
+                          className="ml-1 w-4 h-4 rounded-full bg-green-300 text-green-700
+                            hover:bg-red-400 hover:text-white transition-colors
+                            flex items-center justify-center text-xs"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
             ) : (
@@ -253,6 +386,13 @@ export default function Home() {
               </p>
             )}
           </div>
+
+          {/* Hint text */}
+          {ingredients.length > 0 && (
+            <p className="text-xs text-gray-500 text-center">
+              💡 ヒント: 食材をクリックすると名前を編集できます
+            </p>
+          )}
 
           {/* Action buttons */}
           <div className="flex gap-3">
@@ -320,6 +460,58 @@ export default function Home() {
               </div>
 
               <ShoppingList items={menuResult.shopping_list} />
+
+              {/* Adoption section */}
+              {!isAdopted ? (
+                <div className="p-6 bg-blue-50 border-2 border-blue-200 rounded-2xl">
+                  <div className="text-center space-y-4">
+                    <p className="text-blue-800 font-medium">
+                      この献立でよろしいですか？
+                    </p>
+                    <div className="flex gap-3 justify-center flex-wrap">
+                      <button
+                        onClick={generateMenu}
+                        disabled={isGenerating}
+                        className="px-6 py-3 bg-white text-gray-700 border border-gray-300 font-bold rounded-xl
+                          hover:bg-gray-50 transition-colors disabled:opacity-50"
+                      >
+                        🔄 別の献立を提案
+                      </button>
+                      <button
+                        onClick={adoptMenu}
+                        disabled={isSaving}
+                        className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl
+                          hover:bg-blue-700 transition-colors disabled:opacity-50
+                          flex items-center gap-2"
+                      >
+                        {isSaving ? (
+                          <>
+                            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            保存中...
+                          </>
+                        ) : (
+                          <>
+                            ✅ この献立を採用する
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 bg-green-50 border-2 border-green-200 rounded-2xl text-center">
+                  <span className="text-4xl">🎊</span>
+                  <p className="text-green-800 font-bold mt-2">
+                    献立が保存されました！
+                  </p>
+                  <p className="text-green-600 text-sm mt-1">
+                    次回の提案時には、今回のメニューと被らないようにします
+                  </p>
+                </div>
+              )}
             </>
           )}
 
