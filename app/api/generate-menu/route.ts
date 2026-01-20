@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { openai, MODEL, GenerateMenuResponse } from '@/lib/openai'
+import { anthropic, MODEL, GenerateMenuResponse } from '@/lib/anthropic'
 
 // =============================================
 // POST /api/generate-menu
@@ -38,16 +38,11 @@ export async function POST(request: NextRequest) {
     // 食材リストを整形
     const ingredientsText = body.ingredients.join('、')
 
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: `あなたは家庭料理の献立プランナーです。
+    const systemPrompt = `あなたは優秀な料理研究家です。出力は必ずJSON形式のみを行ってください。
+
 与えられた食材を効率的に使い切る3日分の献立を考えてください。
 
-必ず以下のJSON形式のみで回答してください。説明文は不要です。
-
+出力形式:
 {
   "days": [
     {
@@ -77,33 +72,46 @@ export async function POST(request: NextRequest) {
 2. 過去の履歴とメイン料理が被らないようにすること
 3. 栄養バランスを考慮すること
 4. 家庭で作りやすい料理を提案すること
-5. 買い足しが必要な基本調味料（塩、醤油、油など）はshopping_listに記載`,
-        },
-        {
-          role: 'user',
-          content: `【現在の食材】
+5. 買い足しが必要な基本調味料（塩、醤油、油など）はshopping_listに記載`
+
+    const userPrompt = `【現在の食材】
 ${ingredientsText}
 
 【過去の献立履歴（直近5件）】
 ${historyText}
 
 上記の食材を使って、3日分の献立を考えてください。
-過去の履歴と被らないメニューにしてください。`,
+過去の履歴と被らないメニューにしてください。
+必ずJSONのみを出力し、挨拶文やmarkdown記法（\`\`\`jsonなど）は含めないでください。`
+
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+        {
+          role: 'assistant',
+          content: '{',
         },
       ],
-      response_format: { type: 'json_object' },
-      max_tokens: 2000,
     })
 
-    const content = response.choices[0]?.message?.content
-    if (!content) {
+    // レスポンスからテキストを抽出
+    const textBlock = response.content.find((block) => block.type === 'text')
+    if (!textBlock || textBlock.type !== 'text') {
       return NextResponse.json(
         { error: 'AIからの応答がありませんでした' },
         { status: 500 }
       )
     }
 
-    const result: GenerateMenuResponse = JSON.parse(content)
+    // prefillで開始した '{' と応答を結合してJSONをパース
+    const jsonString = '{' + textBlock.text
+    const result: GenerateMenuResponse = JSON.parse(jsonString)
 
     // バリデーション: 3日分あるか確認
     if (!result.days || result.days.length !== 3) {
