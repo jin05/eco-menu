@@ -75,7 +75,9 @@ export function parseBase64DataUrl(dataUrl: string): {
   mediaType: SupportedImageMediaType
   data: string
 } | null {
-  const match = dataUrl.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,(.+)$/)
+  const match = dataUrl.match(
+    /^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$/
+  )
   if (!match) {
     return null
   }

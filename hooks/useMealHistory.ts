@@ -13,6 +13,14 @@ export interface MealHistoryItem {
   main_dish: string
 }
 
+/**
+ * 献立の保存先。
+ * - remote: Supabaseに保存（端末をまたいで残る）
+ * - local: 未ログインのためローカルのみ
+ * - local-fallback: Supabaseへの保存に失敗しローカルのみ
+ */
+export type SaveDestination = 'remote' | 'local' | 'local-fallback'
+
 export interface MealHistoryRecord {
   id: string
   user_id: string
@@ -88,15 +96,16 @@ export function useMealHistory() {
   const saveMenuToHistory = useCallback(async (
     menuResult: GenerateMenuResponse,
     usedIngredients: string[]
-  ): Promise<boolean> => {
+  ): Promise<SaveDestination> => {
+    // オフライン時や保存失敗時のフォールバックとして常にローカルにも残す
+    saveLocalHistory(menuResult, usedIngredients)
+
     try {
       const supabase = getSupabaseClient()
       const { data: { user } } = await supabase.auth.getUser()
 
       if (!user) {
-        console.log('ユーザー未認証: ローカルストレージに保存')
-        saveLocalHistory(menuResult, usedIngredients)
-        return true
+        return 'local'
       }
 
       const today = new Date().toISOString().split('T')[0]
@@ -112,18 +121,13 @@ export function useMealHistory() {
 
       if (error) {
         console.error('保存エラー:', error)
-        // フォールバックとしてローカルに保存
-        saveLocalHistory(menuResult, usedIngredients)
-        return false
+        return 'local-fallback'
       }
 
-      // ローカルにも保存（オフライン対応）
-      saveLocalHistory(menuResult, usedIngredients)
-      return true
+      return 'remote'
     } catch (err) {
       console.error('保存エラー:', err)
-      saveLocalHistory(menuResult, usedIngredients)
-      return false
+      return 'local-fallback'
     }
   }, [])
 

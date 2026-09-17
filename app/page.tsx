@@ -4,9 +4,16 @@ import { useState } from 'react'
 import ImageUploader from '@/components/ImageUploader'
 import RecipeCard, { ShoppingList, RecipeCardSkeleton } from '@/components/RecipeCard'
 import type { GenerateMenuResponse, AnalyzeImageResponse } from '@/lib/anthropic'
-import { useMealHistory } from '@/hooks/useMealHistory'
+import { useMealHistory, type SaveDestination } from '@/hooks/useMealHistory'
 
 type Step = 'upload' | 'ingredients' | 'menu'
+
+const SAVE_MESSAGES: Record<SaveDestination, string> = {
+  remote: '献立を保存しました！次回の提案に反映されます。',
+  local: 'この端末に保存しました。ログインすると他の端末でも履歴が使えます。',
+  'local-fallback':
+    'サーバーに保存できなかったため、この端末にのみ保存しました。',
+}
 
 export default function Home() {
   const [step, setStep] = useState<Step>('upload')
@@ -69,7 +76,6 @@ export default function Home() {
     try {
       // 1. Supabaseから直近3回分の履歴を取得
       const history = await fetchRecentHistory(3)
-      console.log('取得した履歴:', history)
 
       // 2. 履歴を含めてAPI呼び出し
       const res = await fetch('/api/generate-menu', {
@@ -105,16 +111,10 @@ export default function Home() {
     setSuccessMessage(null)
 
     try {
-      const success = await saveMenuToHistory(menuResult, ingredients)
-
-      if (success) {
-        setIsAdopted(true)
-        setSuccessMessage('献立を保存しました！次回の提案に反映されます。')
-      } else {
-        setSuccessMessage('献立をローカルに保存しました。')
-        setIsAdopted(true)
-      }
-    } catch (err) {
+      const destination = await saveMenuToHistory(menuResult, ingredients)
+      setIsAdopted(true)
+      setSuccessMessage(SAVE_MESSAGES[destination])
+    } catch {
       setError('保存中にエラーが発生しました')
     } finally {
       setIsSaving(false)
