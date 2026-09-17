@@ -1,6 +1,6 @@
 'use client'
 
-import { DayMenu } from '@/lib/openai'
+import type { DayMenu } from '@/lib/anthropic'
 
 interface RecipeCardProps {
   menu: DayMenu

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import ImageUploader from '@/components/ImageUploader'
 import RecipeCard, { ShoppingList, RecipeCardSkeleton } from '@/components/RecipeCard'
-import { GenerateMenuResponse, AnalyzeImageResponse } from '@/lib/openai'
+import type { GenerateMenuResponse, AnalyzeImageResponse } from '@/lib/anthropic'
 import { useMealHistory } from '@/hooks/useMealHistory'
 
 type Step = 'upload' | 'ingredients' | 'menu'

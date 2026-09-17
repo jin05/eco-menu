@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react'
 import { getSupabaseClient } from '@/lib/supabase'
-import { GenerateMenuResponse } from '@/lib/openai'
+import type { GenerateMenuResponse } from '@/lib/anthropic'
 
 // =============================================
 // 履歴データの型定義
@@ -35,14 +35,13 @@ export interface MealHistoryRecord {
 // =============================================
 
 export function useMealHistory() {
-  const supabase = getSupabaseClient()
-
   /**
    * 直近N件の献立履歴を取得する
    * マンネリ防止のため、過去のメイン料理名を返す
    */
   const fetchRecentHistory = useCallback(async (limit: number = 3): Promise<MealHistoryItem[]> => {
     try {
+      const supabase = getSupabaseClient()
       const { data: { user } } = await supabase.auth.getUser()
 
       if (!user) {
@@ -81,7 +80,7 @@ export function useMealHistory() {
       console.error('履歴取得エラー:', err)
       return getLocalHistory(limit)
     }
-  }, [supabase])
+  }, [])
 
   /**
    * 献立をデータベースに保存する
@@ -91,6 +90,7 @@ export function useMealHistory() {
     usedIngredients: string[]
   ): Promise<boolean> => {
     try {
+      const supabase = getSupabaseClient()
       const { data: { user } } = await supabase.auth.getUser()
 
       if (!user) {
@@ -125,7 +125,7 @@ export function useMealHistory() {
       saveLocalHistory(menuResult, usedIngredients)
       return false
     }
-  }, [supabase])
+  }, [])
 
   return {
     fetchRecentHistory,
