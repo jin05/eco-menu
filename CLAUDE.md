@@ -21,8 +21,9 @@ Claude APIのビジョン機能を使用して、ユーザーがアップロー�
 
 **実装の特徴:**
 - 画像データをbase64形式で送信
-- 構造化されたJSON形式で食材リストを取得
+- structured outputs（`output_config.format`）で食材リストのJSONスキーマを強制
 - 正確な食材名の日本語出力
+- 送信前にクライアント側で長辺1568pxへリサイズし、APIコストを抑制（`lib/image.ts`）
 
 ### 2. 献立生成機能 (Text Generation)
 
@@ -38,8 +39,8 @@ Claude APIを使用して、提供された食材リストと過去の献立履�
 
 **実装の特徴:**
 - システムプロンプトで料理研究家のペルソナを設定
-- JSON出力形式を厳密に指定
-- プレフィル技術（`{ "role": "assistant", "content": "{" }`）を使用してJSON形式を強制
+- structured outputs（`output_config.format`）でJSON形式を強制
+- Zodスキーマにより出力を実行時バリデーション
 - 履歴データを活用したパーソナライズされた提案
 
 ## 技術的な実装詳細
@@ -49,18 +50,42 @@ Claude APIを使用して、提供された食材リストと過去の献立履�
 ```typescript
 import Anthropic from '@anthropic-ai/sdk'
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+// APIキー未設定を早期に検知するため、クライアントは関数経由で生成する
+export function getAnthropicClient(): Anthropic {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new MissingApiKeyError()
+  return new Anthropic({ apiKey })
+}
+
+export const MODEL = 'claude-opus-5'
+```
+
+### structured outputs
+
+JSON出力の強制にはassistant prefillではなく `output_config.format` を使用する。
+prefill（`{ "role": "assistant", "content": "{" }`）は現行世代のモデルでは
+400エラーになるため使用しないこと。
+
+```typescript
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
+
+const response = await client.messages.parse({
+  model: MODEL,
+  max_tokens: 8192,
+  system: systemPrompt,
+  output_config: { format: zodOutputFormat(GenerateMenuSchema) },
+  messages: [{ role: 'user', content: userPrompt }],
 })
 
-const MODEL = 'claude-3-5-sonnet-20241022'
+// パースに失敗すると null になるため、必ずガードする
+if (!response.parsed_output) { /* エラー処理 */ }
 ```
 
 ### プロンプトエンジニアリング
 
 **献立生成のシステムプロンプト:**
 ```
-あなたは優秀な料理研究家です。出力は必ずJSON形式のみを行ってください。
+あなたは優秀な料理研究家です。
 
 与えられた食材を効率的に使い切る3日分の献立を考えてください。
 
@@ -70,21 +95,28 @@ const MODEL = 'claude-3-5-sonnet-20241022'
 3. 栄養バランスを考慮すること
 4. 家庭で作りやすい料理を提案すること
 5. 買い足しが必要な基本調味料（塩、醤油、油など）はshopping_listに記載
+6. daysは必ず3件、dayは1から3の連番にすること
+7. instructionsは簡単な調理手順を2-3文で記載すること
 ```
+
+出力形式の指示はstructured outputsのスキーマが担うため、プロンプトには
+JSONの形を書かない。プロンプトには「何を作るか」のルールだけを書く。
 
 ### レスポンス形式
 
+型は `lib/anthropic.ts` のZodスキーマから導出される（スキーマが唯一の定義）。
+
 ```typescript
-interface GenerateMenuResponse {
-  days: Array<{
-    day: number
-    main_dish: string
-    side_dish: string
-    instructions: string
-  }>
-  shopping_list: string[]
-}
+export const GenerateMenuSchema = z.object({
+  days: z.array(DayMenuSchema),
+  shopping_list: z.array(z.string()),
+})
+
+export type GenerateMenuResponse = z.infer<typeof GenerateMenuSchema>
 ```
+
+クライアントコンポーネントからこれらの型を使う場合は、SDKがクライアント
+バンドルに混入しないよう `import type` を使うこと。
 
 ## 環境設定
 
@@ -97,7 +129,7 @@ ANTHROPIC_API_KEY=your_api_key_here
 ### パッケージのインストール
 
 ```bash
-npm install @anthropic-ai/sdk
+npm install @anthropic-ai/sdk zod
 ```
 
 ## プロジェクトの歴史
@@ -107,23 +139,27 @@ npm install @anthropic-ai/sdk
 - より高度なビジョン機能
 - 日本語処理の精度向上
 - JSON出力の安定性
-- プレフィル機能による出力制御の容易さ
 
-移行は `2533ee5` コミットで完了しました。
+移行は `2533ee5` コミットで完了しました。ただしこのコミットで削除された
+`lib/openai.ts` への参照が3ファイルに残っておりビルドが壊れていたため、
+後続の対応で修正済み。同時にモデルを現行世代へ更新し、当時使用していた
+prefillによるJSON強制はstructured outputsへ置き換えた。
 
 ## 関連ファイル
 
 - `/app/api/analyze-image/route.ts` - 画像解析APIエンドポイント
 - `/app/api/generate-menu/route.ts` - 献立生成APIエンドポイント
-- `/lib/anthropic.ts` - Claude API設定とヘルパー関数
+- `/lib/anthropic.ts` - Claude API設定、Zodスキーマ、ヘルパー関数
+- `/lib/image.ts` - クライアント側の画像リサイズ・圧縮
+- `/lib/rate-limit.ts` - APIルートのレート制限
 - `/app/page.tsx` - メインUIコンポーネント
 
 ## 使用上の注意
 
 1. **APIキーの管理**: 環境変数にAPIキーを設定し、リポジトリにコミットしないでください
-2. **レート制限**: Claude APIのレート制限に注意してください
-3. **コスト管理**: Vision APIは通常のテキスト生成よりコストが高いため、使用量を監視してください
-4. **エラーハンドリング**: ネットワークエラーやAPI制限エラーに対する適切なエラーハンドリングを実装しています
+2. **レート制限**: Claude API側のレート制限に加え、APIルート側でもIP単位の制限をかけています（`lib/rate-limit.ts`）。インメモリ実装のため、複数インスタンスにスケールする場合は外部ストアへの置き換えが必要です
+3. **コスト管理**: Vision APIは通常のテキスト生成よりコストが高いため、`/api/analyze-image` の制限は他より厳しく設定しています
+4. **エラーハンドリング**: `MissingApiKeyError` / `RateLimitError` / `AuthenticationError` を区別して扱い、クライアントには内部情報を返さないようにしています
 
 ## 今後の改善案
 

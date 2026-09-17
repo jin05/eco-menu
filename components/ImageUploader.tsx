@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, useCallback } from 'react'
+import { compressImage, ImageProcessingError } from '@/lib/image'
 
 interface ImageUploaderProps {
   onImageSelect: (base64: string) => void
@@ -10,27 +11,38 @@ interface ImageUploaderProps {
 export default function ImageUploader({ onImageSelect, disabled }: ImageUploaderProps) {
   const [preview, setPreview] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
 
-  const processFile = useCallback((file: File) => {
+  const processFile = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('画像ファイルを選択してください')
+      setError('画像ファイルを選択してください')
       return
     }
 
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string
+    setError(null)
+    setIsProcessing(true)
+    try {
+      // 送信前に縮小することで、リクエストサイズとAPIコストを抑える
+      const base64 = await compressImage(file)
       setPreview(base64)
       onImageSelect(base64)
+    } catch (err) {
+      setError(
+        err instanceof ImageProcessingError
+          ? err.message
+          : '画像の処理に失敗しました'
+      )
+    } finally {
+      setIsProcessing(false)
     }
-    reader.readAsDataURL(file)
   }, [onImageSelect])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) processFile(file)
+    if (file) void processFile(file)
   }
 
   const handleDrag = (e: React.DragEvent) => {
@@ -49,17 +61,25 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
     setDragActive(false)
 
     const file = e.dataTransfer.files?.[0]
-    if (file) processFile(file)
+    if (file) void processFile(file)
   }
 
   const clearImage = () => {
     setPreview(null)
+    setError(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
     if (cameraInputRef.current) cameraInputRef.current.value = ''
   }
 
+  const isBusy = disabled || isProcessing
+
   return (
     <div className="w-full">
+      {error && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+          {error}
+        </div>
+      )}
       {/* Hidden inputs */}
       <input
         ref={fileInputRef}
@@ -67,7 +87,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
         accept="image/*"
         onChange={handleFileChange}
         className="hidden"
-        disabled={disabled}
+        disabled={isBusy}
       />
       <input
         ref={cameraInputRef}
@@ -76,7 +96,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
         capture="environment"
         onChange={handleFileChange}
         className="hidden"
-        disabled={disabled}
+        disabled={isBusy}
       />
 
       {!preview ? (
@@ -93,7 +113,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
               ? 'border-green-500 bg-green-50'
               : 'border-gray-300 bg-gray-50 hover:border-green-400 hover:bg-green-50/50'
             }
-            ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+            ${isBusy ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
           `}
         >
           <div className="flex flex-col items-center gap-4">
@@ -118,7 +138,9 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
                 冷蔵庫の写真またはレシートをアップロード
               </p>
               <p className="text-sm text-gray-500 mt-1">
-                ドラッグ&ドロップ、または下のボタンから選択
+                {isProcessing
+                  ? '画像を処理しています...'
+                  : 'ドラッグ&ドロップ、または下のボタンから選択'}
               </p>
             </div>
 
@@ -126,7 +148,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
               <button
                 type="button"
                 onClick={() => cameraInputRef.current?.click()}
-                disabled={disabled}
+                disabled={isBusy}
                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg
                   hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -142,7 +164,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={disabled}
+                disabled={isBusy}
                 className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-300
                   rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -158,6 +180,8 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
       ) : (
         /* Preview area */
         <div className="relative rounded-2xl overflow-hidden bg-gray-100">
+          {/* next/image はローカル生成のdata URLプレビューには使えないため素のimgを使う */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={preview}
             alt="アップロードされた画像"
@@ -166,7 +190,7 @@ export default function ImageUploader({ onImageSelect, disabled }: ImageUploader
           <button
             type="button"
             onClick={clearImage}
-            disabled={disabled}
+            disabled={isBusy}
             className="absolute top-3 right-3 p-2 bg-black/50 text-white rounded-full
               hover:bg-black/70 transition-colors disabled:opacity-50"
           >
