@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react'
 import { getSupabaseClient } from '@/lib/supabase'
-import { GenerateMenuResponse } from '@/lib/openai'
+import type { GenerateMenuResponse } from '@/lib/anthropic'
 
 // =============================================
 // 履歴データの型定義
